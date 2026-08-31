@@ -13,18 +13,44 @@ export interface Comment {
     createdAt: string;
 }
 
+export interface Project {
+    id: string;
+    ownerId: string;
+    title: string;
+    description: string;
+    color: string;
+    createdAt: string;
+    updatedAt: string;
+}
+
+export interface CreateProjectInput {
+    title: string;
+    description?: string;
+    color?: string;
+    tasks?: string[];
+}
+
+export interface UpdateProjectInput {
+    title?: string;
+    description?: string;
+    color?: string;
+}
+
 export interface Task {
     id: string;
     ownerId: string;
-    projectId?: string;
+    projectId?: string | null;
     title: string;
     description: string;
     status: TaskStatus;
     tags: string[];
-    comments: Comment[] | null;
+    comments: Comment[];
     dueDate?: string;
     createdAt: string;
     updatedAt: string;
+    spentMinutes: number;
+    startedAt?: string | null;
+    completedAt: string | null;
 }
 
 export interface Credentials {
@@ -51,5 +77,19 @@ export interface UpdateTaskInput {
     description?: string;
     status?: TaskStatus;
     tags?: string[];
-    dueDate?: string;
+    dueDate?: string | null;
+    projectId?: string | null;
+    spentMinutes?: number;
+}
+
+export type DueFilter = "any" | "overdue" | "today" | "week";
+
+export interface AddCommentInput {
+  taskId: string;
+  body: string;
+}
+
+export interface DeleteCommentInput {
+  taskId: string;
+  commentId: string;
 }

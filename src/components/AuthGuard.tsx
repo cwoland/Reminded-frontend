@@ -6,17 +6,17 @@ import { useAuthStore } from "@/store/auth";
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
+  const status = useAuthStore((s) => s.status);
   const token = useAuthStore((s) => s.token);
-  const hydrated = useAuthStore((s) => s.hydrated);
 
   useEffect(() => {
-    if (hydrated && !token) {
+    if (status === "anonymous") {
       router.replace("/login");
     }
-  }, [hydrated, token, router]);
+  }, [status, router]);
 
-  if (!hydrated) {
-    return <div className="p-8 text-slate-500">Загрузка…</div>;
+  if (status === "loading") {
+    return <div className="p-8 text-muted">Загрузка...</div>;
   }
 
   if (!token) {

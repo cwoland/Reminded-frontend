@@ -7,12 +7,17 @@ import type {
   Task,
   TaskStatus,
   UpdateTaskInput,
+  Project,
+  CreateProjectInput,
+  UpdateProjectInput,
+  AddCommentInput,
+  DeleteCommentInput,
 } from "@/types/api";
 
 export const api = createApi({
   reducerPath: "api",
   baseQuery: axiosBaseQuery(),
-  tagTypes: ["Task", "User"],
+  tagTypes: ["Task", "User", "Project"],
   endpoints: (builder) => ({
     register: builder.mutation<AuthResponse, Credentials>({
       query: (body) => ({ url: "/auth/register", method: "POST", data: body }),
@@ -41,6 +46,37 @@ export const api = createApi({
       query: (id) => ({ url: `/tasks/${id}`, method: "DELETE" }),
       invalidatesTags: ["Task"],
     }),
+        getProjects: builder.query<Project[], void>({
+      query: () => ({ url: "/projects" }),
+      providesTags: ["Project"],
+    }),
+    createProject: builder.mutation<Project, CreateProjectInput>({
+      query: (body) => ({ url: "/projects", method: "POST", data: body }),
+      invalidatesTags: ["Project", "Task"],
+    }),
+    updateProject: builder.mutation<Project, { id: string; patch: UpdateProjectInput }>({
+      query: ({ id, patch }) => ({ url: `/projects/${id}`, method: "PATCH", data: patch }),
+      invalidatesTags: ["Project"],
+    }),
+    deleteProject: builder.mutation<void, string>({
+      query: (id) => ({ url: `/projects/${id}`, method: "DELETE" }),
+      invalidatesTags: ["Project", "Task"],
+    }),
+        addComment: builder.mutation<Task, AddCommentInput>({
+      query: ({ taskId, body }) => ({
+        url: `/tasks/${taskId}/comments`,
+        method: "POST",
+        data: { body },
+      }),
+      invalidatesTags: (_result, _error, { taskId }) => [{ type: "Task", id: taskId }],
+    }),
+    deleteComment: builder.mutation<Task, DeleteCommentInput>({
+      query: ({ taskId, commentId }) => ({
+        url: `/tasks/${taskId}/comments/${commentId}`,
+        method: "DELETE",
+      }),
+      invalidatesTags: (_result, _error, { taskId }) => [{ type: "Task", id: taskId }],
+    }),
   }),
 });
 
@@ -52,4 +88,10 @@ export const {
   useCreateTaskMutation,
   useUpdateTaskMutation,
   useDeleteTaskMutation,
+  useGetProjectsQuery,
+  useCreateProjectMutation,
+  useUpdateProjectMutation,
+  useDeleteProjectMutation,
+  useAddCommentMutation,
+  useDeleteCommentMutation,
 } = api;

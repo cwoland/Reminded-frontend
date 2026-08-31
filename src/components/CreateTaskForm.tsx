@@ -1,15 +1,20 @@
 "use client";
 
 import React, { useState } from "react";
-import { useCreateTaskMutation } from "@/lib/api/tasksApi";
+import { useCreateTaskMutation, useGetProjectsQuery } from "@/lib/api/tasksApi";
+import { Button } from "@/components/ui/Button";
+import { fromDateInput } from "@/lib/deadline";
 
 export function CreateTaskForm() {
     const [title, setTitle] = useState("");
     const [description, setDescription] = useState("");
     const [tagsInput, setTagsInput] = useState("");
+    const [dueDate, setDueDate] = useState("");
+    const [projectId, setProjectId] = useState("");
     const [error, setError] = useState<string | null>(null);
 
     const [createTask, { isLoading }] = useCreateTaskMutation();
+    const { data: projects } = useGetProjectsQuery();
 
     async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
         event.preventDefault();
@@ -20,33 +25,41 @@ export function CreateTaskForm() {
             .map((tag) => tag.trim())
             .filter(Boolean);
 
+        const due = fromDateInput(dueDate);
+
         try {
             await createTask({
                 title: title.trim(),
                 description: description.trim(),
                 tags,
+                ...(due ? { dueDate: due } : {}),
+                ...(projectId ? { projectId } : {}),
             }).unwrap();
 
             setTitle("");
             setDescription("");
             setTagsInput("");
+            setDueDate("");
         } catch (err) {
             setError((err as { message?: string }).message ?? "Не удалось создать задачу");
         }
     }
 
+    const fieldClass =
+        "w-full rounded-[var(--radius-md)] border border-line bg-surface-2 px-3 py-2 text-sm text-text outline-none transition-colors duration-[var(--dur-hint)] focus:border-accent";
+
     return (
         <form
             onSubmit={handleSubmit}
-            className="rounded-xl border border-line bg-surface-1 p-4 shadow-sm"
+            className="rounded-[var(--radius-lg)] border border-line bg-surface-1/90 p-4 backdrop-blur-md"
         >
-            <input 
+            <input
                 type="text"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="Что нужно сделать?"
                 required
-                className="w-full rounded-lg border border-line px-3 py-2 text-text outline-none focus:border-accent"
+                className={fieldClass}
             />
 
             <textarea
@@ -54,7 +67,7 @@ export function CreateTaskForm() {
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="Описание (необязательно)"
                 rows={2}
-                className="mt-2 w-full resize-none rounded-lg border border-line px-3 py-2 text-sm text-text outline-none focus:border-accent"
+                className={`${fieldClass} mt-2 resize-none`}
             />
 
             <input
@@ -62,18 +75,49 @@ export function CreateTaskForm() {
                 value={tagsInput}
                 onChange={(e) => setTagsInput(e.target.value)}
                 placeholder="Теги через запятую"
-                className="mt-2 w-full rounded-lg border border-line px-3 py-2 text-sm text-text outline-none focus:border-accent"
+                className={`${fieldClass} mt-2`}
             />
 
-            {error && <p className="mt-2 text-sm text-red-700">{error}</p>}
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+                <label className="flex items-center gap-2">
+                    <span className="meta">срок</span>
+                    <input
+                        type="date"
+                        value={dueDate}
+                        onChange={(e) => setDueDate(e.target.value)}
+                        className="rounded-[var(--radius-md)] border border-line bg-surface-2 px-3 py-1.5 text-xs text-text outline-none transition-colors duration-[var(--dur-hint)] focus:border-accent [color-scheme:dark]"
+                    />
+                </label>
 
-            <button
+                {projects && projects.length > 0 && (
+                    <label className="flex items-center gap-2">
+                        <span className="meta">проект</span>
+                        <select
+                            value={projectId}
+                            onChange={(e) => setProjectId(e.target.value)}
+                            className="rounded-[var(--radius-md)] border border-line bg-surface-2 px-3 py-1.5 text-xs text-text outline-none transition-colors duration-[var(--dur-hint)] focus:border-accent"
+                        >
+                            <option value="">без проекта</option>
+                            {projects.map((project) => (
+                                <option key={project.id} value={project.id}>
+                                    {project.title}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                )}
+            </div>
+
+            {error && <p className="mt-2 text-sm text-cancelled">{error}</p>}
+
+            <Button
                 type="submit"
+                variant="primary"
                 disabled={isLoading || title.trim() === ""}
-                className="mt-3 rounded-lg px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700 disabled:opacity-50"
+                className="mt-3"
             >
-                {isLoading ? "Создаем..." : "Добавить задачу"}
-            </button>
+                {isLoading ? "Создаём…" : "Добавить задачу"}
+            </Button>
         </form>
     );
 }
