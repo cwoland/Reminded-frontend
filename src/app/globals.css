@@ -1,26 +1,124 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: dark;
+
+  --bg-surface-1: #0c1015;
+  --bg-surface-2: #12181f;
+  --bg-surface-3: #1a222c;
+
+  --line: #1c242f;
+  --line-strong: #2a3542;
+
+  --text: #e7edf4;
+  --text-muted: #93a1b1;
+  --text-faint: #5d6b7a;
+
+  --accent: #4db8ff;
+  --accent-strong: #8ad4ff;
+  --accent-dim: #16344a;
+
+  --status-planned: #8b9bad;
+  --status-progress: #4db8ff;
+  --status-done: #3fbf8f;
+  --status-cancelled: #e0736f;
+
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+
+  --dur-press: 160ms;
+  --dur-hint: 150ms;
+  --dur-menu: 200ms;
+  --dur-panel: 260ms;
+  --dur-scene: 520ms;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
+  --elev-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --elev-2: 0 8px 24px -8px rgba(0, 0, 0, 0.7);
+
+  --glow: 0 0 0 1px color-mix(in oklab, var(--accent) 40%, transparent),
+          0 0 28px -8px color-mix(in oklab, var(--accent) 60%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-scene: 0ms;
+    --dur-panel: 120ms;
+  }
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-bg: var(--bg);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+
+  --color-text: var(--text);
+  --color-muted: var(--text-muted);
+  --color-faint: var(--text-faint);
+
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-dim: var(--accent-dim);
+
+  --color-planned: var(--status-planned);
+  --color-progress: var(--status-progress);
+  --color-done: var(--status-done);
+  --color-cancelled: var(--status-cancelled);
+
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+
+  --ease-out-strong: var(--ease-out);
+  --ease-in-out-strong: var(--ease-in-out);
+  --ease-drawer: var(--ease-drawer);
+
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@layer base {
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--accent) 30%, transparent);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  .meta {
+    font-family: var(--font-mono), ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--text-faint);
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@keyframes breathe {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1 }
 }
