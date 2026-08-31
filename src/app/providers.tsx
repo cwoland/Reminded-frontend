@@ -3,13 +3,13 @@
 import { Provider } from "react-redux";
 import { store } from "@/store/redux";
 import { AuthBootstrap } from "@/components/AuthBootstrap";
+import { ServiceWorkerRegister } from "@/components/ServiceWorkerRegister";
 
 export function Providers({ children }: { children: React.ReactNode }) {
-    return (
+  return (
     <Provider store={store}>
-        <AuthBootstrap>
-        {children}
-        </AuthBootstrap>
+      <ServiceWorkerRegister />
+      <AuthBootstrap>{children}</AuthBootstrap>
     </Provider>
-    );
+  );
 }

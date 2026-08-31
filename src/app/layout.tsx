@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Providers } from "./providers";
@@ -14,9 +14,24 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+export const viewport: Viewport = {
+  themeColor: "#05060a",
+  colorScheme: "dark",
+};
+
 export const metadata: Metadata = {
   title: "Reminded",
   description: "Фикс актуальных задач и трекинг часов",
+  applicationName: "Reminded",
+  appleWebApp: {
+    capable: true,
+    title: "Reminded",
+    statusBarStyle: "black-translucent",
+  },
+  icons: {
+    icon: "/icons/icon-192.png",
+    apple: "/icons/apple-touch-icon.png",
+  },
 };
 
 export default function RootLayout({
