@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useSpeechRecognition } from "@/lib/voice/useSpeechRecognition";
-import { parseIntent } from "@/lib/voice/intents";
-import type { CommandId, Intent } from "@/lib/voice/commands";
+import { parseIntent, type Intent } from "@/lib/voice/parser";
+import type { CommandId } from "@/lib/voice/commands";
+import type { Project, Task } from "@/types/api";
 import { primeVoices, speak, stopSpeaking } from "@/lib/voice/speak";
 import { addVoiceLogEntry } from "@/lib/voice/log";
 import { cn } from "@/lib/cn";
@@ -37,11 +38,17 @@ function writeFlag(key: string, value: boolean): void {
 
 interface VoiceControlProps {
   onIntent: (intent: Intent) => Promise<{ command: CommandId; values: Record<string, string> }>;
-  /** Открыта ли карточка задачи — включает короткие команды вроде «готово» */
   hasTaskContext: boolean;
+  projects: Project[];
+  tasks: Task[];
 }
 
-export function VoiceControl({ onIntent, hasTaskContext }: VoiceControlProps) {
+export function VoiceControl({
+  onIntent,
+  hasTaskContext,
+  projects,
+  tasks,
+}: VoiceControlProps) {
   const [feedback, setFeedback] = useState<string | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
 
@@ -77,11 +84,25 @@ export function VoiceControl({ onIntent, hasTaskContext }: VoiceControlProps) {
   const handleResult = useCallback(
     async (variants: string[]) => {
       const heard = variants[0] ?? "";
-      const parsed = parseIntent(variants, { hasTask: hasTaskContext });
+      const parsed = parseIntent(variants, {
+        hasTask: hasTaskContext,
+        projects,
+        tasks,
+      });
 
       if (parsed.status !== "ok") {
-        const commandId: CommandId = parsed.status === "needs_task" ? "no_context" : "unknown";
-        const message = renderReply(replies[commandId], { text: heard });
+        let commandId: CommandId = "unknown";
+        let values: Record<string, string> = { text: heard };
+
+        if (parsed.status === "needs_task") {
+          commandId = "no_context";
+          values = {};
+        } else if (parsed.status === "not_found") {
+          commandId = parsed.what === "project" ? "project_not_found" : "task_not_found";
+          values = { name: parsed.query };
+        }
+
+        const message = renderReply(replies[commandId], values);
 
         addVoiceLogEntry({ heard, command: null, reply: message });
 
@@ -100,7 +121,7 @@ export function VoiceControl({ onIntent, hasTaskContext }: VoiceControlProps) {
       if (replyEnabled) speak(message);
       setTimeout(() => setFeedback(null), 4500);
     },
-    [onIntent, replyEnabled, replies, hasTaskContext]
+    [onIntent, replyEnabled, replies, hasTaskContext, projects, tasks]
   );
 
   const wake = useMemo(

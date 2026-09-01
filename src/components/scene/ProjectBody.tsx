@@ -76,29 +76,47 @@ function seedFrom(id: string | null): number {
 interface ProjectBodyProps {
   planet: ProjectPlanet;
   isSpinning: boolean;
+  isDragging: boolean;
   onFocus: (id: string | null) => void;
+  onDragStart: (id: string | null, event: React.PointerEvent<HTMLButtonElement>) => void;
+  onResetPosition: (id: string | null) => void;
 }
 
-export function ProjectBody({ planet, isSpinning, onFocus }: ProjectBodyProps) {
-  const { id, title, color, total, active, x, y, depth, scale, size } = planet;
+export function ProjectBody({
+  planet,
+  isSpinning,
+  isDragging,
+  onFocus,
+  onDragStart,
+  onResetPosition,
+}: ProjectBodyProps) {
+  const { id, title, color, total, active, x, y, depth, scale, size, pinned = false } = planet;
 
   const { edges, nodes } = useMemo(() => buildSphere(seedFrom(id)), [id]);
   const box = size * 1.9;
   const gradientId = `planet-${id ?? "orphans"}`;
 
+  const frozen = isSpinning || isDragging;
+
   return (
     <button
       type="button"
+      onPointerDown={(event) => onDragStart(id, event)}
       onClick={() => onFocus(id)}
+      onDoubleClick={() => onResetPosition(id)}
+      title={pinned ? "Расположено вручную · двойной клик вернёт на орбиту" : title}
       style={{
-        transform: `translate3d(calc(${x}px - 50%), calc(${y}px - 50%), 0) scale(${scale})`,
-        zIndex: Math.round((depth + 1) * 100),
-        opacity: 0.72 + (depth + 1) * 0.14,
-        transitionProperty: isSpinning ? "opacity" : "opacity, transform",
-        transitionDuration: isSpinning ? "var(--dur-hint)" : "var(--dur-scene)",
+        transform: `translate3d(calc(${x}px - 50%), calc(${y}px - 50%), 0) scale(${
+          isDragging ? scale * 1.06 : scale
+        })`,
+        zIndex: isDragging ? 500 : Math.round((depth + 1) * 100),
+        opacity: isDragging ? 1 : 0.72 + (depth + 1) * 0.14,
+        transitionProperty: frozen ? "opacity" : "opacity, transform",
+        transitionDuration: frozen ? "var(--dur-hint)" : "var(--dur-scene)",
         transitionTimingFunction: "var(--ease-in-out-strong)",
+        cursor: isDragging ? "grabbing" : "grab",
       }}
-      className="group absolute left-1/2 top-1/2 flex flex-col items-center gap-1.5"
+      className="group absolute left-1/2 top-1/2 flex touch-none flex-col items-center gap-1.5"
     >
       <svg
         width={box}
@@ -107,8 +125,8 @@ export function ProjectBody({ planet, isSpinning, onFocus }: ProjectBodyProps) {
         className="overflow-visible transition-[filter] duration-[var(--dur-menu)] ease-[var(--ease-out-strong)]"
         style={{
           filter:
-            active > 0
-              ? `drop-shadow(0 0 10px color-mix(in oklab, ${color} 65%, transparent))`
+            isDragging || active > 0
+              ? `drop-shadow(0 0 ${isDragging ? 16 : 10}px color-mix(in oklab, ${color} 65%, transparent))`
               : undefined,
         }}
       >
@@ -152,6 +170,19 @@ export function ProjectBody({ planet, isSpinning, onFocus }: ProjectBodyProps) {
           strokeWidth="1.8"
           strokeOpacity="0.55"
         />
+
+        {pinned && (
+          <circle
+            cx="50"
+            cy="50"
+            r={R + 5}
+            fill="none"
+            stroke={color}
+            strokeWidth="1"
+            strokeOpacity="0.5"
+            strokeDasharray="3 5"
+          />
+        )}
 
         {active > 0 && <circle cx="50" cy="50" r="5.5" fill={color} />}
       </svg>

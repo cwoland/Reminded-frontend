@@ -21,6 +21,7 @@ interface TaskBodyProps {
   isDragging: boolean;
   onSelect: (id: string) => void;
   onDragStart: (id: string, event: React.PointerEvent<HTMLButtonElement>) => void;
+  onResetPosition: (id: string) => void;
 }
 
 export function TaskBody({
@@ -30,6 +31,7 @@ export function TaskBody({
   isDragging,
   onSelect,
   onDragStart,
+  onResetPosition,
 }: TaskBodyProps) {
   const { task, x, y, depth, scale } = body;
   const frozen = isSpinning || isDragging;
@@ -67,6 +69,7 @@ export function TaskBody({
           ? "border-accent/70 bg-surface-1/95 text-text"
           : "border-line-strong/80 bg-surface-1/90 text-muted hover:border-accent/60 hover:bg-surface-2 hover:text-text"
       )}
+      onDoubleClick={() => onResetPosition(task.id)}
     >
       <Image
         src={`/icons/${task.status}.png`}

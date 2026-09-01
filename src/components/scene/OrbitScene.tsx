@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   TILT,
@@ -9,8 +9,16 @@ import {
   placeGroups,
   rings,
   tasksOfProject,
+  toOrbitPosition,
 } from "@/lib/orbits";
 import type { SceneFocus } from "@/lib/orbits";
+import {
+  clearPosition,
+  getEmptyPositions,
+  getPositions,
+  savePosition,
+  subscribePositions,
+} from "@/lib/scene/positions";
 import { useUpdateTaskMutation } from "@/lib/api/tasksApi";
 import type { Project, Task } from "@/types/api";
 import { TaskBody } from "./TaskBody";
@@ -21,6 +29,7 @@ import { SceneBackdrop } from "./SceneBackdrop";
 import { EmberField, type EmberFieldHandle, type EmberSource } from "./EmberField";
 
 const DRAG_THRESHOLD = 5;
+const SNAP_DISTANCE = 26;
 
 interface SpinState {
   pointerId: number;
@@ -30,13 +39,18 @@ interface SpinState {
   captured: boolean;
 }
 
-interface DragTaskState {
-  taskId: string;
+interface DragState {
+  kind: "task" | "project";
+  /** id задачи или проекта; для «Без проекта» — "orphans" */
+  id: string;
   pointerId: number;
   startClientX: number;
   startClientY: number;
   centerX: number;
   centerY: number;
+  /** смещение точки захвата от центра тела */
+  grabX: number;
+  grabY: number;
   x: number;
   y: number;
   active: boolean;
@@ -94,28 +108,37 @@ export function OrbitScene({
 
   const [rotation, setRotation] = useState(-Math.PI / 2);
   const [isSpinning, setIsSpinning] = useState(false);
-  const [dragTask, setDragTask] = useState<DragTaskState | null>(null);
-
+  const [drag, setDrag] = useState<DragState | null>(null);
   const [sceneSize, setSceneSize] = useState({ width: 800, height: 560 });
-
-  const emberRef = useRef<EmberFieldHandle>(null);
-  const rotationRef = useRef(-Math.PI / 2);
-  const previousStatuses = useRef<Map<string, string>>(new Map());
 
   const sceneRef = useRef<HTMLDivElement>(null);
   const spinRef = useRef<SpinState | null>(null);
   const inertiaRef = useRef<number | null>(null);
   const suppressClick = useRef(false);
-
-  const [updateTask] = useUpdateTaskMutation();
+  const emberRef = useRef<EmberFieldHandle>(null);
+  const rotationRef = useRef(-Math.PI / 2);
+  const previousStatuses = useRef<Map<string, string>>(new Map());
 
   const dockNodes = useRef(new Map<string, HTMLElement>());
   const dockRects = useRef<{ id: string | null; rect: DOMRect }[]>([]);
 
-  function registerDockNode(key: string, node: HTMLElement | null) {
-    if (node) dockNodes.current.set(key, node);
-    else dockNodes.current.delete(key);
-  }
+  const [updateTask] = useUpdateTaskMutation();
+
+  const positions = useSyncExternalStore(subscribePositions, getPositions, getEmptyPositions);
+
+  // ——— раскладка ———
+
+  const groups = useMemo(() => groupProjects(projects, tasks), [projects, tasks]);
+  const dockTargets = buildDockTargets(focus, projects, groups);
+
+  const planets = placeGroups(groups, rotation, positions.projects);
+
+  const focusedProject =
+    focus.kind === "project" && focus.id ? projects.find((p) => p.id === focus.id) : undefined;
+  const focusedTasks = focus.kind === "project" ? tasksOfProject(tasks, focus.id) : [];
+  const bodies = layoutBodies(focusedTasks, rotation, positions.tasks);
+
+  // ——— эффекты ———
 
   useEffect(() => {
     return () => {
@@ -127,8 +150,8 @@ export function OrbitScene({
     function handleKey(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
 
-      if (dragTask) {
-        setDragTask(null);
+      if (drag) {
+        setDrag(null);
         suppressClick.current = true;
         return;
       }
@@ -140,7 +163,7 @@ export function OrbitScene({
 
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [dragTask, focus, onFocusChange]);
+  }, [drag, focus, onFocusChange]);
 
   useEffect(() => {
     const scene = sceneRef.current;
@@ -171,7 +194,6 @@ export function OrbitScene({
     }
 
     previousStatuses.current = next;
-
     if (!completed) return;
 
     const laid = layoutBodies(
@@ -183,6 +205,8 @@ export function OrbitScene({
     emberRef.current?.burst(body?.x ?? 0, body?.y ?? 0, "#ff9e2c");
   }, [tasks, focus]);
 
+  // ——— геометрия ———
+
   function nearestRing(x: number, y: number) {
     const radius = Math.sqrt(x * x + (y / TILT) * (y / TILT));
 
@@ -191,7 +215,21 @@ export function OrbitScene({
     );
   }
 
-  function handleBodyPointerDown(taskId: string, event: React.PointerEvent<HTMLButtonElement>) {
+  function spin(delta: number) {
+    setRotation((current) => {
+      const next = current + delta;
+      rotationRef.current = next;
+      return next;
+    });
+  }
+
+  // ——— перетаскивание тел ———
+
+  function beginDrag(
+    kind: "task" | "project",
+    rawId: string | null,
+    event: React.PointerEvent<HTMLButtonElement>
+  ) {
     event.stopPropagation();
 
     const scene = sceneRef.current;
@@ -199,24 +237,43 @@ export function OrbitScene({
 
     if (inertiaRef.current !== null) cancelAnimationFrame(inertiaRef.current);
 
+    const id = rawId ?? "orphans";
+
+    const source =
+      kind === "task"
+        ? bodies.find((body) => body.task.id === id)
+        : planets.find((planet) => (planet.id ?? "orphans") === id);
+
+    if (!source) return;
+
     const rect = scene.getBoundingClientRect();
     const centerX = rect.left + rect.width / 2;
     const centerY = rect.top + rect.height / 2;
 
-    dockRects.current = dockTargets.flatMap((target) => {
-      const node = dockNodes.current.get(target.id ?? "orphans");
-      return node ? [{ id: target.id, rect: node.getBoundingClientRect() }] : [];
-    });
+    // за какую точку тела взялись — чтобы оно не прыгало под курсор
+    const grabX = source.x - (event.clientX - centerX);
+    const grabY = source.y - (event.clientY - centerY);
 
-    setDragTask({
-      taskId,
+    dockRects.current =
+      kind === "task"
+        ? dockTargets.flatMap((target) => {
+            const node = dockNodes.current.get(target.id ?? "orphans");
+            return node ? [{ id: target.id, rect: node.getBoundingClientRect() }] : [];
+          })
+        : [];
+
+    setDrag({
+      kind,
+      id,
       pointerId: event.pointerId,
       startClientX: event.clientX,
       startClientY: event.clientY,
       centerX,
       centerY,
-      x: event.clientX - centerX,
-      y: event.clientY - centerY,
+      grabX,
+      grabY,
+      x: source.x,
+      y: source.y,
       active: false,
     });
   }
@@ -226,88 +283,80 @@ export function OrbitScene({
 
     if (inertiaRef.current !== null) cancelAnimationFrame(inertiaRef.current);
 
-    spinRef.current = { pointerId: event.pointerId, startX: event.clientX, lastX: event.clientX, velocity: 0, captured: false };
+    spinRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      lastX: event.clientX,
+      velocity: 0,
+      captured: false,
+    };
   }
 
-    function handlePointerMove(event: React.PointerEvent<HTMLDivElement>) {
-    if (dragTask && dragTask.pointerId === event.pointerId) {
-      const dx = event.clientX - dragTask.startClientX;
-      const dy = event.clientY - dragTask.startClientY;
-      const active = dragTask.active || Math.hypot(dx, dy) > DRAG_THRESHOLD;
+  function handlePointerMove(event: React.PointerEvent<HTMLDivElement>) {
+    if (drag && drag.pointerId === event.pointerId) {
+      const dx = event.clientX - drag.startClientX;
+      const dy = event.clientY - drag.startClientY;
+      const active = drag.active || Math.hypot(dx, dy) > DRAG_THRESHOLD;
 
-      if (active && !dragTask.active) {
+      if (active && !drag.active) {
         event.currentTarget.setPointerCapture(event.pointerId);
         suppressClick.current = true;
       }
 
-      const hit = active
-        ? dockRects.current.find(
-            ({ rect }) =>
-              event.clientX >= rect.left &&
-              event.clientX <= rect.right &&
-              event.clientY >= rect.top &&
-              event.clientY <= rect.bottom
-          )
-        : undefined;
+      const hit =
+        active && drag.kind === "task"
+          ? dockRects.current.find(
+              ({ rect }) =>
+                event.clientX >= rect.left &&
+                event.clientX <= rect.right &&
+                event.clientY >= rect.top &&
+                event.clientY <= rect.bottom
+            )
+          : undefined;
 
-      setDragTask({
-        ...dragTask,
-        x: event.clientX - dragTask.centerX,
-        y: event.clientY - dragTask.centerY,
+      setDrag({
+        ...drag,
+        x: event.clientX - drag.centerX + drag.grabX,
+        y: event.clientY - drag.centerY + drag.grabY,
         active,
         dockId: hit ? hit.id : undefined,
       });
       return;
     }
 
-    const spin = spinRef.current;
-    if (!spin || spin.pointerId !== event.pointerId) return;
+    const state = spinRef.current;
+    if (!state || state.pointerId !== event.pointerId) return;
 
-    if (!spin.captured) {
-      if (Math.abs(event.clientX - spin.startX) <= DRAG_THRESHOLD) return;
+    if (!state.captured) {
+      if (Math.abs(event.clientX - state.startX) <= DRAG_THRESHOLD) return;
 
       event.currentTarget.setPointerCapture(event.pointerId);
-      spin.captured = true;
+      state.captured = true;
       setIsSpinning(true);
     }
 
-    const delta = -(event.clientX - spin.lastX) * 0.006;
-    spin.lastX = event.clientX;
-    spin.velocity = delta;
+    const delta = -(event.clientX - state.lastX) * 0.006;
+    state.lastX = event.clientX;
+    state.velocity = delta;
 
-    setRotation((current) => {
-      const next = current + delta;
-      rotationRef.current = next;
-      return next;
-    });
+    spin(delta);
   }
 
   function handlePointerUp(event: React.PointerEvent<HTMLDivElement>) {
-    if (dragTask && dragTask.pointerId === event.pointerId) {
-      if (dragTask.active) {
-        if (dragTask.dockId !== undefined) {
-          updateTask({ id: dragTask.taskId, patch: { projectId: dragTask.dockId } });
-        } else {
-        const target = nearestRing(dragTask.x, dragTask.y);
-        const task = tasks.find((item) => item.id === dragTask.taskId);
+    if (drag && drag.pointerId === event.pointerId) {
+      if (drag.active) dropBody(drag);
 
-        if (task && task.status !== target.status) {
-          updateTask({ id: task.id, patch: { status: target.status } });
-        }
-      }
-    }
-
-      setDragTask(null);
+      setDrag(null);
       setTimeout(() => {
         suppressClick.current = false;
       }, 0);
       return;
     }
 
-    const spin = spinRef.current;
-    if (!spin || spin.pointerId !== event.pointerId) return;
+    const state = spinRef.current;
+    if (!state || state.pointerId !== event.pointerId) return;
 
-    let velocity = spin.velocity;
+    let velocity = state.velocity;
     spinRef.current = null;
 
     if (reduce || Math.abs(velocity) < 0.0015) {
@@ -322,11 +371,7 @@ export function OrbitScene({
       previous = now;
       const frames = dt / 16.67;
 
-      setRotation((current) => {
-        const next = current + velocity * frames;
-        rotationRef.current = next;
-        return next;
-      });
+      spin(velocity * frames);
       velocity *= Math.pow(0.94, frames);
 
       if (Math.abs(velocity) > 0.0004) {
@@ -339,43 +384,92 @@ export function OrbitScene({
     inertiaRef.current = requestAnimationFrame(step);
   }
 
-  const groups = useMemo(() => groupProjects(projects, tasks), [projects, tasks]);
+  /** Что происходит, когда тело отпустили */
+  function dropBody(state: DragState) {
+    const { x, y } = state;
 
-  const dockTargets = buildDockTargets(focus, projects, groups);
+    if (state.kind === "project") {
+      savePosition("projects", state.id, toOrbitPosition(x, y, rotationRef.current));
+      return;
+    }
 
+    // док важнее всего: это перенос в другой проект
+    if (state.dockId !== undefined) {
+      updateTask({ id: state.id, patch: { projectId: state.dockId } });
+      clearPosition("tasks", state.id);
+      return;
+    }
 
-  const planets = placeGroups(groups, rotation);
+    const flatY = y / TILT;
+    const radius = Math.sqrt(x * x + flatY * flatY);
+    const ring = nearestRing(x, y);
 
-  const focusedProject =
-    focus.kind === "project" && focus.id ? projects.find((p) => p.id === focus.id) : undefined;
-  const focusedTasks = focus.kind === "project" ? tasksOfProject(tasks, focus.id) : [];
-  const bodies = layoutBodies(focusedTasks, rotation);
+    if (Math.abs(radius - ring.radius) <= SNAP_DISTANCE) {
+      // рядом с кольцом — примагничиваем и меняем статус
+      const task = tasks.find((item) => item.id === state.id);
 
-  const targetRing = dragTask?.active && dragTask.dockId === undefined ? nearestRing(dragTask.x, dragTask.y) : null;
+      if (task && task.status !== ring.status) {
+        updateTask({ id: task.id, patch: { status: ring.status } });
+      }
+
+      clearPosition("tasks", state.id);
+      return;
+    }
+
+    // отпустили в стороне — оставляем там, где отпустили
+    savePosition("tasks", state.id, toOrbitPosition(x, y, rotationRef.current));
+  }
+
+  function resetPosition(kind: "tasks" | "projects", rawId: string | null) {
+    clearPosition(kind, rawId ?? "orphans");
+  }
+
+  function registerDockNode(key: string, node: HTMLElement | null) {
+    if (node) dockNodes.current.set(key, node);
+    else dockNodes.current.delete(key);
+  }
+
+  // ——— то, что рисуем ———
+
+  const draggingTaskId = drag?.active && drag.kind === "task" ? drag.id : null;
+  const draggingProjectId = drag?.active && drag.kind === "project" ? drag.id : null;
 
   const renderedBodies = bodies.map((body) =>
-    dragTask?.active && body.task.id === dragTask.taskId
-      ? { ...body, x: dragTask.x, y: dragTask.y, depth: 1, scale: 1.08 }
+    body.task.id === draggingTaskId
+      ? { ...body, x: drag!.x, y: drag!.y, depth: 1, scale: 1.08 }
       : body
   );
 
-    const emberSources: EmberSource[] =
+  const renderedPlanets = planets.map((planet) =>
+    (planet.id ?? "orphans") === draggingProjectId
+      ? { ...planet, x: drag!.x, y: drag!.y, depth: 1 }
+      : planet
+  );
+
+  const targetRing =
+    drag?.active && drag.kind === "task" && drag.dockId === undefined
+      ? (() => {
+          const flatY = drag.y / TILT;
+          const radius = Math.sqrt(drag.x * drag.x + flatY * flatY);
+          const ring = nearestRing(drag.x, drag.y);
+
+          return Math.abs(radius - ring.radius) <= SNAP_DISTANCE ? ring : null;
+        })()
+      : null;
+
+  const emberSources: EmberSource[] =
     focus.kind === "system"
-      ? planets
+      ? renderedPlanets
           .filter((planet) => planet.active > 0)
           .map((planet) => ({ x: planet.x, y: planet.y, color: planet.color }))
       : renderedBodies
           .filter((body) => body.task.status === "in_progress")
           .map((body) => ({ x: body.x, y: body.y, color: "#ff9e2c" }));
 
-    const anchorBody = selectedTaskId
+  const anchorBody = selectedTaskId
     ? bodies.find((body) => body.task.id === selectedTaskId)
     : undefined;
-
   const anchor = anchorBody ? { x: anchorBody.x, y: anchorBody.y } : null;
-
-  const sceneWidth = sceneSize.width;
-  const sceneHeight = sceneSize.height;
 
   const enter = reduce ? { opacity: 0 } : { opacity: 0, transform: "scale(0.93)" };
   const shown = reduce ? { opacity: 1 } : { opacity: 1, transform: "scale(1)" };
@@ -408,9 +502,10 @@ export function OrbitScene({
         onPointerCancel={handlePointerUp}
         className="relative h-[560px] w-full cursor-grab touch-none select-none active:cursor-grabbing"
       >
+        <SceneBackdrop rotation={rotation} />
+        <EmberField ref={emberRef} sources={emberSources} />
+
         <AnimatePresence initial={false}>
-          <SceneBackdrop rotation={rotation} />
-          <EmberField ref={emberRef} sources={emberSources} />
           {focus.kind === "system" ? (
             <motion.div
               key="system"
@@ -437,12 +532,17 @@ export function OrbitScene({
                   style={{ boxShadow: "var(--glow)" }}
                 />
 
-                {planets.map((planet) => (
+                {renderedPlanets.map((planet) => (
                   <ProjectBody
                     key={planet.id ?? "orphans"}
                     planet={planet}
                     isSpinning={isSpinning}
-                    onFocus={(id) => onFocusChange({ kind: "project", id })}
+                    isDragging={(planet.id ?? "orphans") === draggingProjectId}
+                    onFocus={(id) => {
+                      if (!suppressClick.current) onFocusChange({ kind: "project", id });
+                    }}
+                    onDragStart={(id, event) => beginDrag("project", id, event)}
+                    onResetPosition={(id) => resetPosition("projects", id)}
                   />
                 ))}
               </div>
@@ -504,11 +604,12 @@ export function OrbitScene({
                     body={body}
                     isSelected={body.task.id === selectedTaskId}
                     isSpinning={isSpinning}
-                    isDragging={dragTask?.active === true && dragTask.taskId === body.task.id}
+                    isDragging={body.task.id === draggingTaskId}
                     onSelect={(id) => {
                       if (!suppressClick.current) onSelectTask(id);
                     }}
-                    onDragStart={handleBodyPointerDown}
+                    onDragStart={(id, event) => beginDrag("task", id, event)}
+                    onResetPosition={(id) => resetPosition("tasks", id)}
                   />
                 ))}
               </div>
@@ -516,15 +617,15 @@ export function OrbitScene({
               <TaskPopover
                 taskId={selectedTaskId}
                 anchor={anchor}
-                sceneWidth={sceneWidth}
-                sceneHeight={sceneHeight}
+                sceneWidth={sceneSize.width}
+                sceneHeight={sceneSize.height}
                 onClose={() => onSelectTask("")}
               />
 
               <ProjectDock
                 targets={dockTargets}
-                isDragging={dragTask?.active === true}
-                activeId={dragTask?.dockId}
+                isDragging={drag?.active === true && drag.kind === "task"}
+                activeId={drag?.dockId}
                 onNavigate={(id) => onFocusChange({ kind: "project", id })}
                 registerNode={registerDockNode}
               />

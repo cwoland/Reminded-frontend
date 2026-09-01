@@ -1,5 +1,3 @@
-/** Разбор относительных дат из речи: «завтра», «в понедельник», «через три дня» */
-
 const weekdays: { re: RegExp; index: number }[] = [
   { re: /понедельник/i, index: 1 },
   { re: /вторник/i, index: 2 },
@@ -39,10 +37,6 @@ function addDays(days: number): Date {
   return endOfDay(date);
 }
 
-/**
- * Возвращает ISO-строку срока или null, если в тексте нет даты.
- * Дата ставится на конец дня — «сделать до», а не «к началу».
- */
 export function parseDate(text: string): string | null {
   const normalized = text.toLowerCase();
 
@@ -73,12 +67,9 @@ export function parseDate(text: string): string | null {
   return null;
 }
 
-/** Убирает из фразы хвост с датой, чтобы он не попал в название задачи */
+const datePattern =
+  /(?:^|\s)(?:срок\s+)?(?:на|в|во|к|до)?\s*(?:сегодня|послезавтра|завтра|понедельник|вторник|сред[уы]|четверг|пятниц[уы]|суббот[уы]|воскресень[ея]|через\s+(?:\d+|[а-яё]+)\s*(?:день|дня|дней|неделю|недели)?)(?=\s|$)/gi;
+
 export function stripDate(text: string): string {
-  return text
-    .replace(
-      /\s+(?:на\s+)?(?:сегодня|завтра|послезавтра|в\s+понедельник|в\s+вторник|во\s+вторник|в\s+среду|в\s+четверг|в\s+пятницу|в\s+субботу|в\s+воскресенье|через\s+(?:\d+|[а-яё]+)\s*(?:день|дня|дней|неделю|недели)?)\s*$/i,
-      ""
-    )
-    .trim();
+  return text.replace(datePattern, " ").replace(/\s+/g, " ").trim();
 }

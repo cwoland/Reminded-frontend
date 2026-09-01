@@ -30,8 +30,8 @@ import { dueBucket, formatDue } from "@/lib/deadline";
 import { formatMinutes, totalMinutes } from "@/lib/duration";
 
 import { VoiceControl } from "@/components/voice/VoiceControl";
-import { findProject, findTask } from "@/lib/voice/intents";
-import type { CommandId, Intent } from "@/lib/voice/commands";
+import type { Intent } from "@/lib/voice/parser";
+import type { CommandId } from "@/lib/voice/commands";
 
 type View = "scene" | "list";
 
@@ -66,7 +66,9 @@ function TasksScreen() {
   const handleIntent = useCallback(
     async (intent: Intent): Promise<IntentOutcome> => {
       const allTasks = tasks ?? [];
-      const allProjects = projects ?? [];
+
+      /** Задача, с которой работают короткие команды */
+      const openTask = allTasks.find((task) => task.id === selectedId);
 
       switch (intent.kind) {
         case "show_projects":
@@ -79,54 +81,31 @@ function TasksScreen() {
           setSelectedId(null);
           return { command: "go_back", values: {} };
 
-        case "open_project": {
-          const project = findProject(intent.query, allProjects);
-          if (!project) {
-            return { command: "project_not_found", values: { name: intent.query } };
-          }
-
-          setFocus({ kind: "project", id: project.id });
-          setModal({ kind: "project", id: project.id });
-          return { command: "open_project", values: { name: project.title } };
-        }
+        case "open_project":
+          setFocus({ kind: "project", id: intent.projectId });
+          setModal({ kind: "project", id: intent.projectId });
+          return { command: "open_project", values: { name: intent.title } };
 
         case "open_task": {
-          const task = findTask(intent.query, allTasks);
-          if (!task) {
-            return { command: "task_not_found", values: { name: intent.query } };
-          }
+          const task = allTasks.find((item) => item.id === intent.taskId);
 
-          setFocus({ kind: "project", id: task.projectId ?? null });
-          setSelectedId(task.id);
-          return { command: "open_task", values: { name: task.title } };
+          setFocus({ kind: "project", id: task?.projectId ?? null });
+          setSelectedId(intent.taskId);
+          return { command: "open_task", values: { name: intent.title } };
         }
 
-        case "set_status": {
-          const task = findTask(intent.query, allTasks);
-          if (!task) {
-            return { command: "task_not_found", values: { name: intent.query } };
-          }
-
-          await updateTask({ id: task.id, patch: { status: intent.status } }).unwrap();
+        case "set_status":
+          await updateTask({ id: intent.taskId, patch: { status: intent.status } }).unwrap();
 
           return {
             command: "set_status",
-            values: { name: task.title, status: statusLabels[intent.status] },
+            values: { name: intent.title, status: statusLabels[intent.status] },
           };
-        }
 
-        case "create_task": {
-          const project = intent.projectQuery
-            ? findProject(intent.projectQuery, allProjects)
-            : null;
-
-          if (intent.projectQuery && !project) {
-            return { command: "project_not_found", values: { name: intent.projectQuery } };
-          }
-
+        case "create_task":
           await createTask({
             title: intent.title,
-            ...(project ? { projectId: project.id } : {}),
+            ...(intent.projectId ? { projectId: intent.projectId } : {}),
             ...(intent.dueDate ? { dueDate: intent.dueDate } : {}),
           }).unwrap();
 
@@ -134,55 +113,50 @@ function TasksScreen() {
             command: "create_task",
             values: {
               name: intent.title,
-              project: project?.title ?? "",
+              project: intent.projectTitle ?? "",
               due: intent.dueDate ? formatDue(intent.dueDate) : "",
             },
           };
-        }
 
         // ——— команды для открытой задачи ———
 
         case "context_status": {
-          const task = allTasks.find((item) => item.id === selectedId);
-          if (!task) return { command: "no_context", values: {} };
+          if (!openTask) return { command: "no_context", values: {} };
 
-          await updateTask({ id: task.id, patch: { status: intent.status } }).unwrap();
+          await updateTask({ id: openTask.id, patch: { status: intent.status } }).unwrap();
 
           return {
             command: "context_status",
-            values: { name: task.title, status: statusLabels[intent.status] },
+            values: { name: openTask.title, status: statusLabels[intent.status] },
           };
         }
 
         case "context_due": {
-          const task = allTasks.find((item) => item.id === selectedId);
-          if (!task) return { command: "no_context", values: {} };
+          if (!openTask) return { command: "no_context", values: {} };
 
-          await updateTask({ id: task.id, patch: { dueDate: intent.dueDate } }).unwrap();
+          await updateTask({ id: openTask.id, patch: { dueDate: intent.dueDate } }).unwrap();
 
           return {
             command: "context_due",
-            values: { name: task.title, due: formatDue(intent.dueDate) },
+            values: { name: openTask.title, due: formatDue(intent.dueDate) },
           };
         }
 
         case "context_delete": {
-          const task = allTasks.find((item) => item.id === selectedId);
-          if (!task) return { command: "no_context", values: {} };
+          if (!openTask) return { command: "no_context", values: {} };
 
-          await deleteTask(task.id).unwrap();
+          await deleteTask(openTask.id).unwrap();
           setSelectedId(null);
 
-          return { command: "context_delete", values: { name: task.title } };
+          return { command: "context_delete", values: { name: openTask.title } };
         }
 
         case "add_comment": {
-          const task = allTasks.find((item) => item.id === selectedId);
-          if (!task) return { command: "no_context", values: {} };
+          if (!openTask) return { command: "no_context", values: {} };
 
-          await addComment({ taskId: task.id, body: intent.body }).unwrap();
+          await addComment({ taskId: openTask.id, body: intent.body }).unwrap();
 
-          return { command: "add_comment", values: { name: task.title } };
+          return { command: "add_comment", values: { name: openTask.title } };
         }
 
         // ——— запросы ———
@@ -194,10 +168,7 @@ function TasksScreen() {
             command: "query_overdue",
             values: {
               count: String(overdue.length),
-              list: overdue
-                .slice(0, 3)
-                .map((task) => task.title)
-                .join(", "),
+              list: overdue.slice(0, 3).map((task) => task.title).join(", "),
             },
           };
         }
@@ -209,25 +180,14 @@ function TasksScreen() {
             command: "query_in_progress",
             values: {
               count: String(active.length),
-              list: active
-                .slice(0, 3)
-                .map((task) => task.title)
-                .join(", "),
+              list: active.slice(0, 3).map((task) => task.title).join(", "),
             },
           };
         }
 
         case "query_spent": {
-          const project = intent.projectQuery
-            ? findProject(intent.projectQuery, allProjects)
-            : null;
-
-          if (intent.projectQuery && !project) {
-            return { command: "project_not_found", values: { name: intent.projectQuery } };
-          }
-
-          const scope = project
-            ? allTasks.filter((task) => task.projectId === project.id)
+          const scope = intent.projectId
+            ? allTasks.filter((task) => task.projectId === intent.projectId)
             : allTasks;
 
           const minutes = scope.reduce((sum, task) => sum + totalMinutes(task), 0);
@@ -236,13 +196,13 @@ function TasksScreen() {
             command: "query_spent",
             values: {
               time: formatMinutes(minutes),
-              project: project ? ` на «${project.title}»` : "",
+              project: intent.projectTitle ? ` на «${intent.projectTitle}»` : "",
             },
           };
         }
       }
     },
-    [tasks, projects, selectedId, createTask, updateTask, deleteTask, addComment]
+    [tasks, selectedId, createTask, updateTask, deleteTask, addComment]
   );
 
   return (
@@ -266,7 +226,12 @@ function TasksScreen() {
           </button>
         </div>
 
-        <VoiceControl onIntent={handleIntent} hasTaskContext={selectedId !== null} />
+        <VoiceControl
+          onIntent={handleIntent}
+          hasTaskContext={selectedId !== null}
+          projects={projects ?? []}
+          tasks={tasks ?? []}
+        />
 
         <Button variant="outline" onClick={() => setModal({ kind: "projects" })}>
           Проекты
