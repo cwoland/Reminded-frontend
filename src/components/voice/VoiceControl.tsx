@@ -1,37 +1,52 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useSpeechRecognition } from "@/lib/voice/useSpeechRecognition";
 import { parseIntent } from "@/lib/voice/intents";
 import type { CommandId, Intent } from "@/lib/voice/commands";
 import { primeVoices, speak, stopSpeaking } from "@/lib/voice/speak";
+import { addVoiceLogEntry } from "@/lib/voice/log";
 import { cn } from "@/lib/cn";
 import { defaultReplies, loadReplies, renderReply } from "@/lib/voice/replies";
 import { VoiceCommandsModal } from "./VoiceCommandsModal";
 
-const STORAGE_KEY = "reminded-voice-reply";
+const REPLY_KEY = "reminded-voice-reply";
+const WAKE_KEY = "reminded-voice-wake";
+
+export const WAKE_WORDS = ["орбита", "арбита", "orbita"];
+
+function readFlag(key: string, fallback: boolean): boolean {
+  if (typeof window === "undefined") return fallback;
+
+  try {
+    const stored = localStorage.getItem(key);
+    return stored === null ? fallback : stored === "true";
+  } catch {
+    return fallback;
+  }
+}
+
+function writeFlag(key: string, value: boolean): void {
+  try {
+    localStorage.setItem(key, String(value));
+  } catch {
+    // приватный режим — настройка живёт до перезагрузки
+  }
+}
 
 interface VoiceControlProps {
   onIntent: (intent: Intent) => Promise<{ command: CommandId; values: Record<string, string> }>;
+  /** Открыта ли карточка задачи — включает короткие команды вроде «готово» */
+  hasTaskContext: boolean;
 }
 
-export function VoiceControl({ onIntent }: VoiceControlProps) {
+export function VoiceControl({ onIntent, hasTaskContext }: VoiceControlProps) {
   const [feedback, setFeedback] = useState<string | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
 
-  // Настройки читаем один раз при инициализации: компонент рендерится
-  // только на клиенте, после того как AuthBootstrap подтвердил сессию.
-  const [replyEnabled, setReplyEnabled] = useState(() => {
-    if (typeof window === "undefined") return true;
-
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      return stored === null ? true : stored === "true";
-    } catch {
-      return true;
-    }
-  });
+  const [replyEnabled, setReplyEnabled] = useState(() => readFlag(REPLY_KEY, true));
+  const [wakeEnabled, setWakeEnabled] = useState(() => readFlag(WAKE_KEY, false));
 
   const [replies, setReplies] = useState(() =>
     typeof window === "undefined" ? { ...defaultReplies } : loadReplies()
@@ -44,42 +59,59 @@ export function VoiceControl({ onIntent }: VoiceControlProps) {
   function toggleReply() {
     setReplyEnabled((current) => {
       const next = !current;
-
       if (!next) stopSpeaking();
 
-      try {
-        localStorage.setItem(STORAGE_KEY, String(next));
-      } catch {
-        // не сохранилось — не страшно
-      }
+      writeFlag(REPLY_KEY, next);
+      return next;
+    });
+  }
 
+  function toggleWake() {
+    setWakeEnabled((current) => {
+      const next = !current;
+      writeFlag(WAKE_KEY, next);
       return next;
     });
   }
 
   const handleResult = useCallback(
     async (variants: string[]) => {
-      const intent = parseIntent(variants);
+      const heard = variants[0] ?? "";
+      const parsed = parseIntent(variants, { hasTask: hasTaskContext });
 
-      if (!intent) {
-        const message = renderReply(replies.unknown, { text: variants[0] ?? "" });
+      if (parsed.status !== "ok") {
+        const commandId: CommandId = parsed.status === "needs_task" ? "no_context" : "unknown";
+        const message = renderReply(replies[commandId], { text: heard });
+
+        addVoiceLogEntry({ heard, command: null, reply: message });
+
         setFeedback(message);
         if (replyEnabled) speak(message);
         setTimeout(() => setFeedback(null), 4000);
         return;
       }
 
-      const outcome = await onIntent(intent);
+      const outcome = await onIntent(parsed.intent);
       const message = renderReply(replies[outcome.command], outcome.values);
+
+      addVoiceLogEntry({ heard, command: outcome.command, reply: message });
 
       setFeedback(message);
       if (replyEnabled) speak(message);
-      setTimeout(() => setFeedback(null), 3500);
+      setTimeout(() => setFeedback(null), 4500);
     },
-    [onIntent, replyEnabled, replies]
+    [onIntent, replyEnabled, replies, hasTaskContext]
   );
 
-  const { state, interim, error, start, stop } = useSpeechRecognition({ onResult: handleResult });
+  const wake = useMemo(
+    () => ({ enabled: wakeEnabled, words: WAKE_WORDS }),
+    [wakeEnabled]
+  );
+
+  const { state, interim, error, wakeActive, start, stop } = useSpeechRecognition({
+    onResult: handleResult,
+    wake,
+  });
 
   if (state === "unsupported") return null;
 
@@ -119,6 +151,29 @@ export function VoiceControl({ onIntent }: VoiceControlProps) {
         </button>
 
         <button
+          onClick={toggleWake}
+          aria-label={wakeEnabled ? "Выключить ожидание «Орбита»" : "Включить ожидание «Орбита»"}
+          title={
+            wakeEnabled
+              ? "Слушаю ключевое слово «Орбита» — микрофон открыт постоянно"
+              : "Включить ожидание ключевого слова «Орбита»"
+          }
+          className={cn(
+            "flex h-9 items-center gap-1.5 rounded-full px-2 text-[11px]",
+            "transition-colors duration-[var(--dur-hint)]",
+            wakeEnabled ? "text-accent" : "text-faint hover:text-muted"
+          )}
+        >
+          <span
+            className={cn(
+              "h-1.5 w-1.5 rounded-full",
+              wakeActive ? "bg-accent [animation:pulse_2s_ease-in-out_infinite]" : "bg-line-strong"
+            )}
+          />
+          Orbita
+        </button>
+
+        <button
           onClick={toggleReply}
           aria-label={replyEnabled ? "Выключить голосовой ответ" : "Включить голосовой ответ"}
           title={replyEnabled ? "Ответы голосом включены" : "Ответы голосом выключены"}
@@ -146,17 +201,18 @@ export function VoiceControl({ onIntent }: VoiceControlProps) {
 
         <button
           onClick={() => setHelpOpen(true)}
-          aria-label="Список голосовых команд"
+          aria-label="Голосовые команды и журнал"
           className="flex h-9 w-7 items-center justify-center rounded-full text-faint transition-colors duration-[var(--dur-hint)] hover:text-text"
         >
           ?
         </button>
+
         <VoiceCommandsModal
-        open={helpOpen}
-        replies={replies}
-        onChange={setReplies}
-        onClose={() => setHelpOpen(false)}
-      />
+          open={helpOpen}
+          replies={replies}
+          onChange={setReplies}
+          onClose={() => setHelpOpen(false)}
+        />
       </div>
 
       <AnimatePresence>
@@ -166,7 +222,7 @@ export function VoiceControl({ onIntent }: VoiceControlProps) {
             animate={{ opacity: 1, transform: "translateY(0px)" }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2, ease: [0.23, 1, 0.32, 1] }}
-            className="fixed bottom-6 left-1/2 z-[200] -translate-x-1/2 rounded-full border border-accent/30 bg-surface-1/90 px-5 py-2.5 backdrop-blur-xl"
+            className="fixed bottom-6 left-1/2 z-[200] max-w-[90vw] -translate-x-1/2 rounded-full border border-accent/30 bg-surface-1/90 px-5 py-2.5 backdrop-blur-xl"
             style={{ boxShadow: "var(--elev-2)" }}
           >
             <p className="flex items-center gap-2.5 text-sm text-text">

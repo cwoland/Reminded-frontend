@@ -9,7 +9,14 @@ import { CreateTaskForm } from "@/components/CreateTaskForm";
 import { CreateProjectForm } from "@/components/project/CreateProjectForm";
 import { TaskCard } from "@/components/TaskCard";
 import { logout } from "@/store/auth";
-import { useGetTasksQuery, useGetProjectsQuery, useCreateTaskMutation, useUpdateTaskMutation } from "@/lib/api/tasksApi";
+import {
+  useGetTasksQuery,
+  useGetProjectsQuery,
+  useCreateTaskMutation,
+  useUpdateTaskMutation,
+  useDeleteTaskMutation,
+  useAddCommentMutation,
+} from "@/lib/api/tasksApi";
 import { useAuthStore } from "@/store/auth";
 import type { SceneFocus } from "@/lib/orbits";
 import { StatsRail } from "@/components/shell/StatsRail";
@@ -19,6 +26,8 @@ import { HoloModal } from "@/components/ui/HoloModal";
 import { ProjectListContent } from "@/components/project/ProjectListModal";
 import { ProjectDetails } from "@/components/project/ProjectDetails";
 import { statusLabels } from "@/lib/status";
+import { dueBucket, formatDue } from "@/lib/deadline";
+import { formatMinutes, totalMinutes } from "@/lib/duration";
 
 import { VoiceControl } from "@/components/voice/VoiceControl";
 import { findProject, findTask } from "@/lib/voice/intents";
@@ -51,6 +60,8 @@ function TasksScreen() {
 
   const [createTask] = useCreateTaskMutation();
   const [updateTask] = useUpdateTaskMutation();
+  const [deleteTask] = useDeleteTaskMutation();
+  const [addComment] = useAddCommentMutation();
 
   const handleIntent = useCallback(
     async (intent: Intent): Promise<IntentOutcome> => {
@@ -116,16 +127,122 @@ function TasksScreen() {
           await createTask({
             title: intent.title,
             ...(project ? { projectId: project.id } : {}),
+            ...(intent.dueDate ? { dueDate: intent.dueDate } : {}),
           }).unwrap();
 
           return {
             command: "create_task",
-            values: { name: intent.title, project: project?.title ?? "" },
+            values: {
+              name: intent.title,
+              project: project?.title ?? "",
+              due: intent.dueDate ? formatDue(intent.dueDate) : "",
+            },
+          };
+        }
+
+        // ——— команды для открытой задачи ———
+
+        case "context_status": {
+          const task = allTasks.find((item) => item.id === selectedId);
+          if (!task) return { command: "no_context", values: {} };
+
+          await updateTask({ id: task.id, patch: { status: intent.status } }).unwrap();
+
+          return {
+            command: "context_status",
+            values: { name: task.title, status: statusLabels[intent.status] },
+          };
+        }
+
+        case "context_due": {
+          const task = allTasks.find((item) => item.id === selectedId);
+          if (!task) return { command: "no_context", values: {} };
+
+          await updateTask({ id: task.id, patch: { dueDate: intent.dueDate } }).unwrap();
+
+          return {
+            command: "context_due",
+            values: { name: task.title, due: formatDue(intent.dueDate) },
+          };
+        }
+
+        case "context_delete": {
+          const task = allTasks.find((item) => item.id === selectedId);
+          if (!task) return { command: "no_context", values: {} };
+
+          await deleteTask(task.id).unwrap();
+          setSelectedId(null);
+
+          return { command: "context_delete", values: { name: task.title } };
+        }
+
+        case "add_comment": {
+          const task = allTasks.find((item) => item.id === selectedId);
+          if (!task) return { command: "no_context", values: {} };
+
+          await addComment({ taskId: task.id, body: intent.body }).unwrap();
+
+          return { command: "add_comment", values: { name: task.title } };
+        }
+
+        // ——— запросы ———
+
+        case "query_overdue": {
+          const overdue = allTasks.filter((task) => dueBucket(task) === "overdue");
+
+          return {
+            command: "query_overdue",
+            values: {
+              count: String(overdue.length),
+              list: overdue
+                .slice(0, 3)
+                .map((task) => task.title)
+                .join(", "),
+            },
+          };
+        }
+
+        case "query_in_progress": {
+          const active = allTasks.filter((task) => task.status === "in_progress");
+
+          return {
+            command: "query_in_progress",
+            values: {
+              count: String(active.length),
+              list: active
+                .slice(0, 3)
+                .map((task) => task.title)
+                .join(", "),
+            },
+          };
+        }
+
+        case "query_spent": {
+          const project = intent.projectQuery
+            ? findProject(intent.projectQuery, allProjects)
+            : null;
+
+          if (intent.projectQuery && !project) {
+            return { command: "project_not_found", values: { name: intent.projectQuery } };
+          }
+
+          const scope = project
+            ? allTasks.filter((task) => task.projectId === project.id)
+            : allTasks;
+
+          const minutes = scope.reduce((sum, task) => sum + totalMinutes(task), 0);
+
+          return {
+            command: "query_spent",
+            values: {
+              time: formatMinutes(minutes),
+              project: project ? ` на «${project.title}»` : "",
+            },
           };
         }
       }
     },
-    [tasks, projects, createTask, updateTask]
+    [tasks, projects, selectedId, createTask, updateTask, deleteTask, addComment]
   );
 
   return (
@@ -149,7 +266,7 @@ function TasksScreen() {
           </button>
         </div>
 
-        <VoiceControl onIntent={handleIntent} />
+        <VoiceControl onIntent={handleIntent} hasTaskContext={selectedId !== null} />
 
         <Button variant="outline" onClick={() => setModal({ kind: "projects" })}>
           Проекты

@@ -9,7 +9,22 @@ export function normalize(text: string): string {
     .trim();
 }
 
-export function parseIntent(variants: string[]): Intent | null {
+export interface ParseContext {
+  /** Открыта ли сейчас карточка задачи — от этого зависят короткие команды */
+  hasTask: boolean;
+}
+
+export type ParseResult =
+  | { status: "ok"; intent: Intent }
+  | { status: "needs_task" }
+  | { status: "unknown" };
+
+export function parseIntent(
+  variants: string[],
+  context: ParseContext = { hasTask: false }
+): ParseResult {
+  let sawContextOnly = false;
+
   for (const variant of variants) {
     const text = normalize(variant);
 
@@ -18,13 +33,18 @@ export function parseIntent(variants: string[]): Intent | null {
         const match = text.match(pattern);
         if (!match) continue;
 
+        if (command.needsTask && !context.hasTask) {
+          sawContextOnly = true;
+          continue;
+        }
+
         const intent = command.build(match);
-        if (intent) return intent;
+        if (intent) return { status: "ok", intent };
       }
     }
   }
 
-  return null;
+  return sawContextOnly ? { status: "needs_task" } : { status: "unknown" };
 }
 
 /** Расстояние Левенштейна — сколько правок нужно, чтобы получить из a строку b */
