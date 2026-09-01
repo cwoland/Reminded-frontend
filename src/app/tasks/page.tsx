@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { AuthGuard } from "@/components/AuthGuard";
 import { AppShell } from "@/components/shell/AppShell";
 import { OrbitScene } from "@/components/scene/OrbitScene";
@@ -9,7 +9,7 @@ import { CreateTaskForm } from "@/components/CreateTaskForm";
 import { CreateProjectForm } from "@/components/project/CreateProjectForm";
 import { TaskCard } from "@/components/TaskCard";
 import { logout } from "@/store/auth";
-import { useGetTasksQuery, useGetProjectsQuery } from "@/lib/api/tasksApi";
+import { useGetTasksQuery, useGetProjectsQuery, useCreateTaskMutation, useUpdateTaskMutation } from "@/lib/api/tasksApi";
 import { useAuthStore } from "@/store/auth";
 import type { SceneFocus } from "@/lib/orbits";
 import { StatsRail } from "@/components/shell/StatsRail";
@@ -18,10 +18,17 @@ import { ImageBackdrop } from "@/components/shell/ImageBackdrop";
 import { HoloModal } from "@/components/ui/HoloModal";
 import { ProjectListContent } from "@/components/project/ProjectListModal";
 import { ProjectDetails } from "@/components/project/ProjectDetails";
+import { statusLabels } from "@/lib/status";
+
+import { VoiceControl } from "@/components/voice/VoiceControl";
+import { findProject, findTask } from "@/lib/voice/intents";
+import type { CommandId, Intent } from "@/lib/voice/commands";
 
 type View = "scene" | "list";
 
 type Modal = { kind: "projects" } | { kind: "project"; id: string } | null;
+
+type IntentOutcome = { command: CommandId; values: Record<string, string> };
 
 export default function TasksPage() {
   return (
@@ -37,15 +44,93 @@ function TasksScreen() {
   const [view, setView] = useState<View>("scene");
   const [focus, setFocus] = useState<SceneFocus>({ kind: "system" });
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [openProjectId, setOpenProjectId] = useState<string | null>(null);
   const [modal, setModal] = useState<Modal>(null);
 
   const { data: tasks, isLoading, error } = useGetTasksQuery();
   const { data: projects } = useGetProjectsQuery();
 
+  const [createTask] = useCreateTaskMutation();
+  const [updateTask] = useUpdateTaskMutation();
+
+  const handleIntent = useCallback(
+    async (intent: Intent): Promise<IntentOutcome> => {
+      const allTasks = tasks ?? [];
+      const allProjects = projects ?? [];
+
+      switch (intent.kind) {
+        case "show_projects":
+          setModal({ kind: "projects" });
+          return { command: "show_projects", values: {} };
+
+        case "go_back":
+          setFocus({ kind: "system" });
+          setModal(null);
+          setSelectedId(null);
+          return { command: "go_back", values: {} };
+
+        case "open_project": {
+          const project = findProject(intent.query, allProjects);
+          if (!project) {
+            return { command: "project_not_found", values: { name: intent.query } };
+          }
+
+          setFocus({ kind: "project", id: project.id });
+          setModal({ kind: "project", id: project.id });
+          return { command: "open_project", values: { name: project.title } };
+        }
+
+        case "open_task": {
+          const task = findTask(intent.query, allTasks);
+          if (!task) {
+            return { command: "task_not_found", values: { name: intent.query } };
+          }
+
+          setFocus({ kind: "project", id: task.projectId ?? null });
+          setSelectedId(task.id);
+          return { command: "open_task", values: { name: task.title } };
+        }
+
+        case "set_status": {
+          const task = findTask(intent.query, allTasks);
+          if (!task) {
+            return { command: "task_not_found", values: { name: intent.query } };
+          }
+
+          await updateTask({ id: task.id, patch: { status: intent.status } }).unwrap();
+
+          return {
+            command: "set_status",
+            values: { name: task.title, status: statusLabels[intent.status] },
+          };
+        }
+
+        case "create_task": {
+          const project = intent.projectQuery
+            ? findProject(intent.projectQuery, allProjects)
+            : null;
+
+          if (intent.projectQuery && !project) {
+            return { command: "project_not_found", values: { name: intent.projectQuery } };
+          }
+
+          await createTask({
+            title: intent.title,
+            ...(project ? { projectId: project.id } : {}),
+          }).unwrap();
+
+          return {
+            command: "create_task",
+            values: { name: intent.title, project: project?.title ?? "" },
+          };
+        }
+      }
+    },
+    [tasks, projects, createTask, updateTask]
+  );
+
   return (
     <AppShell
-      title={view === "scene" ? "Орбиты" : "Список"}
+      title={view === "scene" ? "Орбита" : "Список"}
       meta={`${user?.username ?? ""} · ${projects?.length ?? 0} проектов · ${tasks?.length ?? 0} задач`}
       actions={
         <>
@@ -54,7 +139,7 @@ function TasksScreen() {
             onClick={() => setView("scene")}
             className={`rounded-[6px] px-2.5 py-1 text-xs transition-colors duration-[var(--dur-hint)] ${view === "scene" ? "bg-surface-3 text-text" : "text-faint hover:text-muted"}`}
           >
-            Сцена
+            Орбита
           </button>
           <button
             onClick={() => setView("list")}
@@ -63,6 +148,12 @@ function TasksScreen() {
             Список
           </button>
         </div>
+
+        <VoiceControl onIntent={handleIntent} />
+
+        <Button variant="outline" onClick={() => setModal({ kind: "projects" })}>
+          Проекты
+        </Button>
         <Button variant="ghost" onClick={logout}>Выйти</Button>
         </>
       }
@@ -74,9 +165,9 @@ function TasksScreen() {
         <div className="flex h-[560px] flex-col items-center justify-center gap-3 text-center">
           <p className="text-sm text-muted">Система пуста</p>
           <p className="max-w-xs text-xs text-faint">
-            Создайте первый проект и задачу в режиме «Список» — они появятся здесь как планеты
+            Создайте первый проект и задачу в режиме «Список» — они появятся здесь
           </p>
-          <Button variant="outline" onClick={() => setModal({ kind: "projects" })}>
+          <Button variant="outline" onClick={() => setView("list")}>
             Перейти к списку
           </Button>
         </div>

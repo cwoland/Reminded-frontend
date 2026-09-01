@@ -18,13 +18,16 @@ import { ProjectBody } from "./ProjectBody";
 import { TaskPopover } from "./TaskPopover";
 import { ProjectDock, type DockTarget } from "./ProjectDock";
 import { SceneBackdrop } from "./SceneBackdrop";
+import { EmberField, type EmberFieldHandle, type EmberSource } from "./EmberField";
 
 const DRAG_THRESHOLD = 5;
 
 interface SpinState {
   pointerId: number;
+  startX: number;
   lastX: number;
   velocity: number;
+  captured: boolean;
 }
 
 interface DragTaskState {
@@ -93,6 +96,12 @@ export function OrbitScene({
   const [isSpinning, setIsSpinning] = useState(false);
   const [dragTask, setDragTask] = useState<DragTaskState | null>(null);
 
+  const [sceneSize, setSceneSize] = useState({ width: 800, height: 560 });
+
+  const emberRef = useRef<EmberFieldHandle>(null);
+  const rotationRef = useRef(-Math.PI / 2);
+  const previousStatuses = useRef<Map<string, string>>(new Map());
+
   const sceneRef = useRef<HTMLDivElement>(null);
   const spinRef = useRef<SpinState | null>(null);
   const inertiaRef = useRef<number | null>(null);
@@ -133,6 +142,47 @@ export function OrbitScene({
     return () => window.removeEventListener("keydown", handleKey);
   }, [dragTask, focus, onFocusChange]);
 
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      setSceneSize({ width, height });
+    });
+
+    observer.observe(scene);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const previous = previousStatuses.current;
+    const next = new Map<string, string>();
+
+    let completed: Task | null = null;
+
+    for (const task of tasks) {
+      next.set(task.id, task.status);
+
+      const before = previous.get(task.id);
+      if (before && before !== "done" && task.status === "done") {
+        completed = task;
+      }
+    }
+
+    previousStatuses.current = next;
+
+    if (!completed) return;
+
+    const laid = layoutBodies(
+      tasksOfProject(tasks, focus.kind === "project" ? focus.id : null),
+      rotationRef.current
+    );
+    const body = laid.find((item) => item.task.id === completed.id);
+
+    emberRef.current?.burst(body?.x ?? 0, body?.y ?? 0, "#ff9e2c");
+  }, [tasks, focus]);
+
   function nearestRing(x: number, y: number) {
     const radius = Math.sqrt(x * x + (y / TILT) * (y / TILT));
 
@@ -152,8 +202,6 @@ export function OrbitScene({
     const rect = scene.getBoundingClientRect();
     const centerX = rect.left + rect.width / 2;
     const centerY = rect.top + rect.height / 2;
-
-    scene.setPointerCapture(event.pointerId);
 
     dockRects.current = dockTargets.flatMap((target) => {
       const node = dockNodes.current.get(target.id ?? "orphans");
@@ -178,18 +226,19 @@ export function OrbitScene({
 
     if (inertiaRef.current !== null) cancelAnimationFrame(inertiaRef.current);
 
-    event.currentTarget.setPointerCapture(event.pointerId);
-    spinRef.current = { pointerId: event.pointerId, lastX: event.clientX, velocity: 0 };
-    setIsSpinning(true);
+    spinRef.current = { pointerId: event.pointerId, startX: event.clientX, lastX: event.clientX, velocity: 0, captured: false };
   }
 
-  function handlePointerMove(event: React.PointerEvent<HTMLDivElement>) {
+    function handlePointerMove(event: React.PointerEvent<HTMLDivElement>) {
     if (dragTask && dragTask.pointerId === event.pointerId) {
       const dx = event.clientX - dragTask.startClientX;
       const dy = event.clientY - dragTask.startClientY;
       const active = dragTask.active || Math.hypot(dx, dy) > DRAG_THRESHOLD;
 
-      if (active) suppressClick.current = true;
+      if (active && !dragTask.active) {
+        event.currentTarget.setPointerCapture(event.pointerId);
+        suppressClick.current = true;
+      }
 
       const hit = active
         ? dockRects.current.find(
@@ -214,11 +263,23 @@ export function OrbitScene({
     const spin = spinRef.current;
     if (!spin || spin.pointerId !== event.pointerId) return;
 
+    if (!spin.captured) {
+      if (Math.abs(event.clientX - spin.startX) <= DRAG_THRESHOLD) return;
+
+      event.currentTarget.setPointerCapture(event.pointerId);
+      spin.captured = true;
+      setIsSpinning(true);
+    }
+
     const delta = -(event.clientX - spin.lastX) * 0.006;
     spin.lastX = event.clientX;
     spin.velocity = delta;
 
-    setRotation((current) => current + delta);
+    setRotation((current) => {
+      const next = current + delta;
+      rotationRef.current = next;
+      return next;
+    });
   }
 
   function handlePointerUp(event: React.PointerEvent<HTMLDivElement>) {
@@ -261,7 +322,11 @@ export function OrbitScene({
       previous = now;
       const frames = dt / 16.67;
 
-      setRotation((current) => current + velocity * frames);
+      setRotation((current) => {
+        const next = current + velocity * frames;
+        rotationRef.current = next;
+        return next;
+      });
       velocity *= Math.pow(0.94, frames);
 
       if (Math.abs(velocity) > 0.0004) {
@@ -294,14 +359,23 @@ export function OrbitScene({
       : body
   );
 
+    const emberSources: EmberSource[] =
+    focus.kind === "system"
+      ? planets
+          .filter((planet) => planet.active > 0)
+          .map((planet) => ({ x: planet.x, y: planet.y, color: planet.color }))
+      : renderedBodies
+          .filter((body) => body.task.status === "in_progress")
+          .map((body) => ({ x: body.x, y: body.y, color: "#ff9e2c" }));
+
     const anchorBody = selectedTaskId
     ? bodies.find((body) => body.task.id === selectedTaskId)
     : undefined;
 
   const anchor = anchorBody ? { x: anchorBody.x, y: anchorBody.y } : null;
 
-  const sceneWidth = sceneRef.current?.clientWidth ?? 800;
-  const sceneHeight = sceneRef.current?.clientHeight ?? 560;
+  const sceneWidth = sceneSize.width;
+  const sceneHeight = sceneSize.height;
 
   const enter = reduce ? { opacity: 0 } : { opacity: 0, transform: "scale(0.93)" };
   const shown = reduce ? { opacity: 1 } : { opacity: 1, transform: "scale(1)" };
@@ -336,6 +410,7 @@ export function OrbitScene({
       >
         <AnimatePresence initial={false}>
           <SceneBackdrop rotation={rotation} />
+          <EmberField ref={emberRef} sources={emberSources} />
           {focus.kind === "system" ? (
             <motion.div
               key="system"

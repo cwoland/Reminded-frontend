@@ -33,7 +33,10 @@ export function TaskPanel({ taskId, onClose }: TaskPanelProps) {
   const [updateTask, { isLoading: isUpdating }] = useUpdateTaskMutation();
   const [deleteTask, { isLoading: isDeleting }] = useDeleteTaskMutation();
   const [hoursDraft, setHoursDraft] = useState<string | null>(null);
-  const [tick, setTick] = useState(0);
+
+  // Пока идёт учёт времени, обновляем отметку раз в минуту,
+  // чтобы счётчик в панели не застывал.
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
     if (!taskId) return;
@@ -49,7 +52,7 @@ export function TaskPanel({ taskId, onClose }: TaskPanelProps) {
   useEffect(() => {
     if (!task?.startedAt) return;
 
-    const timer = setInterval(() => setTick((value) => value + 1), 60_000);
+    const timer = setInterval(() => setNowMs(Date.now()), 60_000);
     return () => clearInterval(timer);
   }, [task?.startedAt]);
 
@@ -187,7 +190,7 @@ export function TaskPanel({ taskId, onClose }: TaskPanelProps) {
                       className="text-2xl font-semibold tabular-nums"
                       style={{ color: task.startedAt ? "var(--accent)" : "var(--text)" }}
                     >
-                      {formatMinutes(totalMinutes(task, Date.now() + tick * 0))}
+                      {formatMinutes(totalMinutes(task, nowMs))}
                     </span>
 
                     {task.startedAt && (
