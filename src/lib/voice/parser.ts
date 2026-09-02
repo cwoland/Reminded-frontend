@@ -15,7 +15,16 @@ export type Intent =
   | { kind: "add_comment"; body: string }
   | { kind: "query_spent"; projectId?: string; projectTitle?: string }
   | { kind: "query_overdue" }
-  | { kind: "query_in_progress" };
+  | { kind: "query_in_progress" }
+  | { kind: "create_project"; title: string }
+  | { kind: "rename_task"; title: string }
+  | { kind: "context_project"; projectId: string | null; projectTitle: string }
+  | { kind: "context_clear_due" }
+  | { kind: "switch_view"; view: "scene" | "list" }
+  | { kind: "query_today" }
+  | { kind: "query_week" }
+  | { kind: "query_stats" }
+  | { kind: "repeat" };
 
 export type ParseResult =
   | { status: "ok"; intent: Intent }
@@ -35,6 +44,7 @@ const verbs = {
   status: /^(?:отметь|отметить|переведи|перевести|перенеси|перенести|перемести|переместить|помести|поместить|поставь|поставить|сделай|сделать|закрой|закрыть|заверши|завершить|начни|начать|верни|вернуть|смени|сменить|измени|изменить|кинь|закинь|отправь)$/,
   remove: /^(?:удали|удалить|убери|убрать|снеси|снести)$/,
   comment: /^(?:запиши|записать|заметка|заметку|комментарий|комментарии|коммент|прокомментируй)$/,
+  rename: /^(?:переименуй|переименовать|назови|назвать|переназови)$/,
 };
 
 const statusWords: { re: RegExp; status: TaskStatus }[] = [
@@ -118,6 +128,87 @@ function parseOne(text: string, context: ParseContext): ParseResult | null {
           },
         }
       : { status: "not_found", what: "project", query };
+  }
+
+  // ——— переключение вида и повтор ———
+
+  if (/^(?:список|списком|таблица)$/.test(normalized)) {
+    return { status: "ok", intent: { kind: "switch_view", view: "list" } };
+  }
+
+  if (/^(?:орбита|орбиту|сцена|сцену|космос)$/.test(normalized)) {
+    return { status: "ok", intent: { kind: "switch_view", view: "scene" } };
+  }
+
+  if (/^(?:повтори(?:те)?|что ты сказал[а]?|еще раз)$/.test(normalized)) {
+    return { status: "ok", intent: { kind: "repeat" } };
+  }
+
+  // сводки
+
+  if (/^(?:что сегодня|планы на сегодня|на сегодня|сегодня)$/.test(normalized) && !context.hasTask) {
+    return { status: "ok", intent: { kind: "query_today" } };
+  }
+
+  if (/^(?:что на (?:этой )?неделе|планы на неделю|на неделю)$/.test(normalized)) {
+    return { status: "ok", intent: { kind: "query_week" } };
+  }
+
+  if (/^(?:статистика|сводка|как дела|сколько задач|итоги)$/.test(normalized)) {
+    return { status: "ok", intent: { kind: "query_stats" } };
+  }
+
+  // создание проекта
+
+  const afterCreateVerb = rest.find((token) => !["новый", "новую", "новое"].includes(token));
+
+  if (verbs.create.test(first) && !mentionsTask(tokens) && afterCreateVerb?.startsWith("проект")) {
+    const title = softTail.replace(/^(?:новый |новую |новое )?проект[а-я]*\s*/i, "").trim();
+
+    if (title) {
+      return { status: "ok", intent: { kind: "create_project", title } };
+    }
+  }
+
+  // переименование открытой задачи
+
+  if (verbs.rename.test(first)) {
+    const title = softTail
+      .replace(/^(?:задачу|её|ее|это)\s+/i, "")
+      .replace(/^в\s+/i, "")
+      .trim();
+
+    if (title) {
+      if (!context.hasTask) return { status: "needs_task" };
+      return { status: "ok", intent: { kind: "rename_task", title } };
+    }
+  }
+
+  // контекст: снять срок
+
+  if (/^(?:убери срок|без срока|сними срок|удали срок)$/.test(normalized)) {
+    if (!context.hasTask) return { status: "needs_task" };
+    return { status: "ok", intent: { kind: "context_clear_due" } };
+  }
+
+  // контекст: перенести открытую задачу в проект
+
+  if (/^(?:в|во)\s+проект[а-я]*\s+(.+)$/.test(normalized)) {
+    if (!context.hasTask) return { status: "needs_task" };
+
+    const query = normalized.replace(/^(?:в|во)\s+проект[а-я]*\s+/, "").trim();
+    const project = bestMatch(query, context.projects, (item) => item.title);
+
+    if (!project) return { status: "not_found", what: "project", query };
+
+    return {
+      status: "ok",
+      intent: {
+        kind: "context_project",
+        projectId: project.item.id,
+        projectTitle: project.item.title,
+      },
+    };
   }
 
   const contextStatus = tokens.length <= 3 ? tokens.map(findStatus).find(Boolean) : null;

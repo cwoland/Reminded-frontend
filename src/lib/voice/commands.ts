@@ -12,6 +12,15 @@ export type CommandId =
   | "query_spent"
   | "query_overdue"
   | "query_in_progress"
+  | "create_project"
+  | "rename_task"
+  | "context_project"
+  | "context_clear_due"
+  | "switch_view"
+  | "query_today"
+  | "query_week"
+  | "query_stats"
+  | "repeat"
   | "project_not_found"
   | "task_not_found"
   | "no_context"
@@ -58,6 +67,72 @@ export const commands: CommandSpec[] = [
     defaultReply: "Записал",
     placeholders: ["{name}"],
     needsTask: true,
+  },
+  {
+    id: "rename_task",
+    title: "Переименовать открытую задачу",
+    examples: ["переименуй в купить кофе", "назови созвон с Петровым"],
+    defaultReply: "Теперь {name}",
+    placeholders: ["{name}"],
+    needsTask: true,
+  },
+  {
+    id: "context_project",
+    title: "Перенести открытую задачу в проект",
+    examples: ["в проект дом", "в проект работа"],
+    defaultReply: "{name} → {project}",
+    placeholders: ["{name}", "{project}"],
+    needsTask: true,
+  },
+  {
+    id: "context_clear_due",
+    title: "Убрать срок у открытой задачи",
+    examples: ["убери срок", "без срока"],
+    defaultReply: "Срок снят",
+    placeholders: ["{name}"],
+    needsTask: true,
+  },
+  {
+    id: "switch_view",
+    title: "Переключить вид",
+    examples: ["список", "орбита", "сцена"],
+    defaultReply: "{view}",
+    placeholders: ["{view}"],
+  },
+  {
+    id: "repeat",
+    title: "Повторить ответ",
+    examples: ["повтори", "что ты сказал"],
+    defaultReply: "{text}",
+    placeholders: ["{text}"],
+  },
+  {
+    id: "query_today",
+    title: "Что сегодня",
+    examples: ["что сегодня", "планы на сегодня"],
+    defaultReply: "На сегодня: {count}. {list}",
+    placeholders: ["{count}", "{list}"],
+  },
+  {
+    id: "query_week",
+    title: "Что на неделе",
+    examples: ["что на этой неделе", "планы на неделю"],
+    defaultReply: "На неделю: {count}. {list}",
+    placeholders: ["{count}", "{list}"],
+  },
+  {
+    id: "query_stats",
+    title: "Общая сводка",
+    examples: ["статистика", "сколько задач", "как дела"],
+    defaultReply: "Всего {total}, в работе {active}, просрочено {overdue}, готово {done}",
+    placeholders: ["{total}", "{active}", "{overdue}", "{done}"],
+  },
+  {
+    id: "create_project",
+    title: "Создать проект",
+    examples: ["создай проект ремонт", "новый проект учёба"],
+    defaultReply: "Проект {name} создан",
+    placeholders: ["{name}"],
   },
   {
     id: "query_overdue",

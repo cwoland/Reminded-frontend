@@ -29,7 +29,7 @@ import { SceneBackdrop } from "./SceneBackdrop";
 import { EmberField, type EmberFieldHandle, type EmberSource } from "./EmberField";
 
 const DRAG_THRESHOLD = 5;
-const SNAP_DISTANCE = 26;
+const SNAP_DISTANCE = 10;
 
 interface SpinState {
   pointerId: number;
@@ -41,14 +41,12 @@ interface SpinState {
 
 interface DragState {
   kind: "task" | "project";
-  /** id задачи или проекта; для «Без проекта» — "orphans" */
   id: string;
   pointerId: number;
   startClientX: number;
   startClientY: number;
   centerX: number;
   centerY: number;
-  /** смещение точки захвата от центра тела */
   grabX: number;
   grabY: number;
   x: number;
@@ -126,8 +124,6 @@ export function OrbitScene({
 
   const positions = useSyncExternalStore(subscribePositions, getPositions, getEmptyPositions);
 
-  // ——— раскладка ———
-
   const groups = useMemo(() => groupProjects(projects, tasks), [projects, tasks]);
   const dockTargets = buildDockTargets(focus, projects, groups);
 
@@ -137,8 +133,6 @@ export function OrbitScene({
     focus.kind === "project" && focus.id ? projects.find((p) => p.id === focus.id) : undefined;
   const focusedTasks = focus.kind === "project" ? tasksOfProject(tasks, focus.id) : [];
   const bodies = layoutBodies(focusedTasks, rotation, positions.tasks);
-
-  // ——— эффекты ———
 
   useEffect(() => {
     return () => {
@@ -205,8 +199,6 @@ export function OrbitScene({
     emberRef.current?.burst(body?.x ?? 0, body?.y ?? 0, "#ff9e2c");
   }, [tasks, focus]);
 
-  // ——— геометрия ———
-
   function nearestRing(x: number, y: number) {
     const radius = Math.sqrt(x * x + (y / TILT) * (y / TILT));
 
@@ -222,8 +214,6 @@ export function OrbitScene({
       return next;
     });
   }
-
-  // ——— перетаскивание тел ———
 
   function beginDrag(
     kind: "task" | "project",
@@ -250,7 +240,6 @@ export function OrbitScene({
     const centerX = rect.left + rect.width / 2;
     const centerY = rect.top + rect.height / 2;
 
-    // за какую точку тела взялись — чтобы оно не прыгало под курсор
     const grabX = source.x - (event.clientX - centerX);
     const grabY = source.y - (event.clientY - centerY);
 
@@ -364,9 +353,11 @@ export function OrbitScene({
       return;
     }
 
-    let previous = performance.now();
+    let previous: number | null = null;
 
     function step(now: number) {
+      if (previous === null) previous = now;
+
       const dt = Math.min(now - previous, 50);
       previous = now;
       const frames = dt / 16.67;
@@ -384,7 +375,6 @@ export function OrbitScene({
     inertiaRef.current = requestAnimationFrame(step);
   }
 
-  /** Что происходит, когда тело отпустили */
   function dropBody(state: DragState) {
     const { x, y } = state;
 
@@ -393,7 +383,6 @@ export function OrbitScene({
       return;
     }
 
-    // док важнее всего: это перенос в другой проект
     if (state.dockId !== undefined) {
       updateTask({ id: state.id, patch: { projectId: state.dockId } });
       clearPosition("tasks", state.id);
@@ -403,21 +392,17 @@ export function OrbitScene({
     const flatY = y / TILT;
     const radius = Math.sqrt(x * x + flatY * flatY);
     const ring = nearestRing(x, y);
+    const onRing = Math.abs(radius - ring.radius) <= SNAP_DISTANCE;
 
-    if (Math.abs(radius - ring.radius) <= SNAP_DISTANCE) {
-      // рядом с кольцом — примагничиваем и меняем статус
+    savePosition("tasks", state.id, toOrbitPosition(x, y, rotationRef.current));
+
+    if (onRing) {
       const task = tasks.find((item) => item.id === state.id);
 
       if (task && task.status !== ring.status) {
         updateTask({ id: task.id, patch: { status: ring.status } });
       }
-
-      clearPosition("tasks", state.id);
-      return;
     }
-
-    // отпустили в стороне — оставляем там, где отпустили
-    savePosition("tasks", state.id, toOrbitPosition(x, y, rotationRef.current));
   }
 
   function resetPosition(kind: "tasks" | "projects", rawId: string | null) {
@@ -428,8 +413,6 @@ export function OrbitScene({
     if (node) dockNodes.current.set(key, node);
     else dockNodes.current.delete(key);
   }
-
-  // ——— то, что рисуем ———
 
   const draggingTaskId = drag?.active && drag.kind === "task" ? drag.id : null;
   const draggingProjectId = drag?.active && drag.kind === "project" ? drag.id : null;

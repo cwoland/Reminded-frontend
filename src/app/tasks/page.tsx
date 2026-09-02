@@ -16,6 +16,7 @@ import {
   useUpdateTaskMutation,
   useDeleteTaskMutation,
   useAddCommentMutation,
+  useCreateProjectMutation,
 } from "@/lib/api/tasksApi";
 import { useAuthStore } from "@/store/auth";
 import type { SceneFocus } from "@/lib/orbits";
@@ -62,12 +63,12 @@ function TasksScreen() {
   const [updateTask] = useUpdateTaskMutation();
   const [deleteTask] = useDeleteTaskMutation();
   const [addComment] = useAddCommentMutation();
+  const [createProject] = useCreateProjectMutation();
 
   const handleIntent = useCallback(
     async (intent: Intent): Promise<IntentOutcome> => {
       const allTasks = tasks ?? [];
 
-      /** Задача, с которой работают короткие команды */
       const openTask = allTasks.find((task) => task.id === selectedId);
 
       switch (intent.kind) {
@@ -118,8 +119,6 @@ function TasksScreen() {
             },
           };
 
-        // ——— команды для открытой задачи ———
-
         case "context_status": {
           if (!openTask) return { command: "no_context", values: {} };
 
@@ -159,8 +158,6 @@ function TasksScreen() {
           return { command: "add_comment", values: { name: openTask.title } };
         }
 
-        // ——— запросы ———
-
         case "query_overdue": {
           const overdue = allTasks.filter((task) => dueBucket(task) === "overdue");
 
@@ -185,6 +182,94 @@ function TasksScreen() {
           };
         }
 
+        case "switch_view":
+          setView(intent.view);
+          return {
+            command: "switch_view",
+            values: { view: intent.view === "list" ? "Список" : "Орбита" },
+          };
+
+        case "create_project": {
+          const project = await createProject({ title: intent.title }).unwrap();
+
+          setFocus({ kind: "project", id: project.id });
+          setModal({ kind: "project", id: project.id });
+
+          return { command: "create_project", values: { name: project.title } };
+        }
+
+        case "rename_task": {
+          if (!openTask) return { command: "no_context", values: {} };
+
+          await updateTask({ id: openTask.id, patch: { title: intent.title } }).unwrap();
+          return { command: "rename_task", values: { name: intent.title } };
+        }
+
+        case "context_project": {
+          if (!openTask) return { command: "no_context", values: {} };
+
+          await updateTask({
+            id: openTask.id,
+            patch: { projectId: intent.projectId },
+          }).unwrap();
+
+          return {
+            command: "context_project",
+            values: { name: openTask.title, project: intent.projectTitle },
+          };
+        }
+
+        case "context_clear_due": {
+          if (!openTask) return { command: "no_context", values: {} };
+
+          await updateTask({ id: openTask.id, patch: { dueDate: null } }).unwrap();
+          return { command: "context_clear_due", values: { name: openTask.title } };
+        }
+
+        case "query_today": {
+          const today = allTasks.filter((task) => {
+            const bucket = dueBucket(task);
+            return bucket === "today" || bucket === "overdue";
+          });
+
+          return {
+            command: "query_today",
+            values: {
+              count: String(today.length),
+              list: today.slice(0, 3).map((task) => task.title).join(", "),
+            },
+          };
+        }
+
+        case "query_week": {
+          const week = allTasks.filter((task) => {
+            const bucket = dueBucket(task);
+            return bucket === "today" || bucket === "overdue" || bucket === "soon";
+          });
+
+          return {
+            command: "query_week",
+            values: {
+              count: String(week.length),
+              list: week.slice(0, 3).map((task) => task.title).join(", "),
+            },
+          };
+        }
+
+        case "query_stats":
+          return {
+            command: "query_stats",
+            values: {
+              total: String(allTasks.length),
+              active: String(allTasks.filter((task) => task.status === "in_progress").length),
+              overdue: String(allTasks.filter((task) => dueBucket(task) === "overdue").length),
+              done: String(allTasks.filter((task) => task.status === "done").length),
+            },
+          };
+
+        case "repeat":
+          return { command: "repeat", values: {} };
+
         case "query_spent": {
           const scope = intent.projectId
             ? allTasks.filter((task) => task.projectId === intent.projectId)
@@ -202,7 +287,7 @@ function TasksScreen() {
         }
       }
     },
-    [tasks, selectedId, createTask, updateTask, deleteTask, addComment]
+    [tasks, selectedId, createTask, updateTask, deleteTask, addComment, createProject]
   );
 
   return (

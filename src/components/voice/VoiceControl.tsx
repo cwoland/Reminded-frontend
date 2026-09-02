@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useSpeechRecognition } from "@/lib/voice/useSpeechRecognition";
 import { parseIntent, type Intent } from "@/lib/voice/parser";
@@ -51,6 +51,8 @@ export function VoiceControl({
 }: VoiceControlProps) {
   const [feedback, setFeedback] = useState<string | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
+
+  const lastReplyRef = useRef("");
 
   const [replyEnabled, setReplyEnabled] = useState(() => readFlag(REPLY_KEY, true));
   const [wakeEnabled, setWakeEnabled] = useState(() => readFlag(WAKE_KEY, false));
@@ -112,8 +114,21 @@ export function VoiceControl({
         return;
       }
 
+      if (parsed.intent.kind === "repeat") {
+        const message = lastReplyRef.current || "Пока нечего повторять";
+
+        addVoiceLogEntry({ heard, command: "repeat", reply: message });
+
+        setFeedback(message);
+        if (replyEnabled) speak(message);
+        setTimeout(() => setFeedback(null), 4000);
+        return;
+      }
+
       const outcome = await onIntent(parsed.intent);
       const message = renderReply(replies[outcome.command], outcome.values);
+
+      lastReplyRef.current = message;
 
       addVoiceLogEntry({ heard, command: outcome.command, reply: message });
 
